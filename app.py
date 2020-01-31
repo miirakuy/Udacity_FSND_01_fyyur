@@ -12,6 +12,11 @@ import logging
 from logging import Formatter, FileHandler
 from flask_wtf import Form
 from forms import *
+from flask_migrate import Migrate
+from datetime import date, datetime, time
+from sqlalchemy.orm import relationship
+import sys
+
 #----------------------------------------------------------------------------#
 # App Config.
 #----------------------------------------------------------------------------#
@@ -20,13 +25,14 @@ app = Flask(__name__)
 moment = Moment(app)
 app.config.from_object('config')
 db = SQLAlchemy(app)
+migrate = Migrate(app, db)
 
 # TODO: connect to a local postgresql database
-
+app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+app.config['SQLALCHEMY_DATABASE_URI'] = 'postgres://postgres:postgres@localhost:5432/fyyur'
 #----------------------------------------------------------------------------#
 # Models.
 #----------------------------------------------------------------------------#
-
 class Venue(db.Model):
     __tablename__ = 'Venue'
 
@@ -37,9 +43,29 @@ class Venue(db.Model):
     address = db.Column(db.String(120))
     phone = db.Column(db.String(120))
     image_link = db.Column(db.String(500))
-    facebook_link = db.Column(db.String(120))
+    facebook_link = db.Column(db.String(120), default='No Facebook Link')
 
     # TODO: implement any missing fields, as a database migration using Flask-Migrate
+    genres = db.Column(db.ARRAY(db.String(120)))
+    web_link = db.Column(db.String(500), default='No Website Link')
+    seeking_artists = db.Column(db.Boolean, default=True)
+    seeking_description = db.Column(db.String(500), default='Currently seeking talent')
+    artists = db.relationship('Show', backref=db.backref('live_venue', lazy=True))
+
+    @property
+    def serialize(self):
+      return {'id': self.id,
+        'name': self.name,
+        'city': self.city,
+        'state': self.state,
+        'phone': self.phone,
+        'image_link': self.image_link,
+        'facebook_link': self.facebook_link,
+        'genres': self.genres,
+        'seeking_artists': self.seeking_artists,
+        'seeking_description': self.seeking_description,
+        'web_link': self.web_link
+      }
 
 class Artist(db.Model):
     __tablename__ = 'Artist'
@@ -49,13 +75,23 @@ class Artist(db.Model):
     city = db.Column(db.String(120))
     state = db.Column(db.String(120))
     phone = db.Column(db.String(120))
-    genres = db.Column(db.String(120))
+    genres = db.Column(db.ARRAY(db.String(120)))
     image_link = db.Column(db.String(500))
-    facebook_link = db.Column(db.String(120))
+    facebook_link = db.Column(db.String(120), default='No Facebook Link')
 
     # TODO: implement any missing fields, as a database migration using Flask-Migrate
+    web_link = db.Column(db.String(500), default='No Website Link')
+    seeking_venues = db.Column(db.Boolean, default=False)
+    seeking_description = db.Column(db.String(500), default='Not currently seeking performance venues')
+    venues = db.relationship('Show', backref=db.backref('live_artist', lazy=True))
 
 # TODO Implement Show and Artist models, and complete all model relationships and properties, as a database migration.
+class Show(db.Model):
+    __tablename__ = 'Show'
+    id = db.Column(db.Integer, primary_key=True)
+    venue_id = db.Column(db.Integer, db.ForeignKey('Venue.id'))
+    artist_id = db.Column(db.Integer, db.ForeignKey('Artist.id'))
+    start_time = db.Column(db.String(120))
 
 #----------------------------------------------------------------------------#
 # Filters.
@@ -79,7 +115,6 @@ app.jinja_env.filters['datetime'] = format_datetime
 def index():
   return render_template('pages/home.html')
 
-
 #  Venues
 #  ----------------------------------------------------------------
 
@@ -87,41 +122,28 @@ def index():
 def venues():
   # TODO: replace with real venues data.
   #       num_shows should be aggregated based on number of upcoming shows per venue.
-  data=[{
-    "city": "San Francisco",
-    "state": "CA",
-    "venues": [{
-      "id": 1,
-      "name": "The Musical Hop",
-      "num_upcoming_shows": 0,
-    }, {
-      "id": 3,
-      "name": "Park Square Live Music & Coffee",
-      "num_upcoming_shows": 1,
-    }]
-  }, {
-    "city": "New York",
-    "state": "NY",
-    "venues": [{
-      "id": 2,
-      "name": "The Dueling Pianos Bar",
-      "num_upcoming_shows": 0,
-    }]
-  }]
-  return render_template('pages/venues.html', areas=data);
+
+  # query city and state uniquely without any duplicates.
+  unique_city_state = Venue.query.with_entities(
+    Venue.city, Venue.state).distinct().all()
+  data = []
+  for cs in unique_city_state:
+    venues = Venue.query.filter_by(city=cs[0], state=cs[1]).all()
+    data.append({'city': cs[0], 'state': cs[1], 'venues': venues})
+  return render_template('pages/venues.html', areas=data)
 
 @app.route('/venues/search', methods=['POST'])
 def search_venues():
   # TODO: implement search on artists with partial string search. Ensure it is case-insensitive.
   # seach for Hop should return "The Musical Hop".
   # search for "Music" should return "The Musical Hop" and "Park Square Live Music & Coffee"
-  response={
-    "count": 1,
-    "data": [{
-      "id": 2,
-      "name": "The Dueling Pianos Bar",
-      "num_upcoming_shows": 0,
-    }]
+  
+  search_term = request.form.get('search_term', None) 
+  query_venues = Venue.query.filter(Venue.name.ilike('%{}%'.format(search_term))).all()
+  count_venues = len(query_venues)
+  response = {
+    "count": count_venues,
+    "data": [b.serialize for b in query_venues]
   }
   return render_template('pages/search_venues.html', results=response, search_term=request.form.get('search_term', ''))
 
@@ -221,6 +243,17 @@ def create_venue_form():
 def create_venue_submission():
   # TODO: insert form data as a new Venue record in the db, instead
   # TODO: modify data to be the data object returned from db insertion
+  name = request.form['name']
+  city = request.form['city']
+  state = request.form['state']
+  address = request.form['address']
+  phone = request.form['phone']
+  genres = request.form['genres']
+  facebook_link = request.form['facebook_link']
+  data = Venue(name=name, city=city, state=state, address=address, phone=phone, genres=genres, facebook_link=facebook_link)
+  db.session.add(data)
+  db.session.commit()
+  db.session.close()
 
   # on successful db insert, flash success
   flash('Venue ' + request.form['name'] + ' was successfully listed!')
