@@ -51,7 +51,7 @@ class Venue(db.Model):
     website = db.Column(db.String(500))
     seeking_talent = db.Column(db.Boolean, default=True)
     seeking_description = db.Column(db.String(500))
-    shows = db.relationship('Show', backref=db.backref('Venue', lazy=True, cascade='all'))
+    shows = db.relationship('Show', backref=db.backref('Venue', lazy=True, cascade='all,delete'))
 
     def __init__(self, name, city, state, address, phone, facebook_link, genres, image_link='', website='', seeking_talent=False, seeking_description=''):
       self.name = name
@@ -109,13 +109,14 @@ class Artist(db.Model):
     website = db.Column(db.String(500))
     seeking_venues = db.Column(db.Boolean, default=False)
     seeking_description = db.Column(db.String(500))
-    shows = db.relationship('Show', backref=db.backref('Artist', lazy=True, cascade='all'))
+    shows = db.relationship('Show', backref=db.backref('Artist', lazy=True))
 
     def create(self):
       db.session.add(self)
       db.session.commit()
 
     def update(self):
+      
       db.session.commit()
 
     def artist_id_name(self):
@@ -145,7 +146,7 @@ class Show(db.Model):
     __tablename__ = 'Show'
     id = db.Column(db.Integer, primary_key=True)
     venue_id = db.Column(db.Integer, db.ForeignKey('Venue.id', ondelete='CASCADE'))
-    artist_id = db.Column(db.Integer, db.ForeignKey('Artist.id', ondelete='CASCADE'))
+    artist_id = db.Column(db.Integer, db.ForeignKey('Artist.id'))
     start_time = db.Column(db.DateTime())
 
     def __init__(self, venue_id, artist_id, start_time):
@@ -155,6 +156,10 @@ class Show(db.Model):
 
     def create(self):
       db.session.add(self)
+      db.session.commit()
+
+    def delete(self):
+      db.session.delete(self)
       db.session.commit()
 
 #----------------------------------------------------------------------------#
@@ -288,23 +293,25 @@ def create_venue_submission():
     db.session.close()
   return render_template('pages/home.html')
 
-@app.route('/venues/<venue_id>', methods=['DELETE'])
+@app.route('/venues/<int:venue_id>', methods=['POST'])
 def delete_venue(venue_id):
   # TODO: Complete this endpoint for taking a venue_id, and using
   # SQLAlchemy ORM to delete a record. Handle cases where the session commit could fail.
   try:
     data = Venue.query.get(venue_id)
     Venue.delete(data)
-    flash('Venue ' + request.form['name'] + ' was successfully deleted!')
+    show_data = Show.query.get(venue_id)
+    Show.delete(show_data)
+    flash('Venue ' + data.name + ' was successfully deleted!')
   except:
     flash('An error occurred. Venue ' + data.name + ' could not be deleted.')
   finally:
     db.session.close()
   return render_template('pages/home.html')
- 
 
   # BONUS CHALLENGE: Implement a button to delete a Venue on a Venue Page, have it so that
   # clicking that button delete it from the db then redirect the user to the homepage
+  # >> Please look at the delete button in the show_venue.html
 
 #  Artists
 #  ----------------------------------------------------------------
@@ -485,12 +492,12 @@ def shows():
   # displays list of shows at /shows
   # TODO: replace with real venues data.
   #       num_shows should be aggregated based on number of upcoming shows per venue.
-
+  
   data = []
   shows = Show.query.all()
   for show in shows:
-    artist = Artist.query.get(show.artist_id)
     venue = Venue.query.get(show.venue_id)
+    artist = Artist.query.get(show.artist_id)
     data.append({
       "venue_id": show.venue_id,
       "venue_name": venue.name,
